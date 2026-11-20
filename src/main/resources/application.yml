@@ -14,3 +14,20 @@ spring:
 
 server:
   port: ${PORT:8080}
+
+# Actuator: solo health e info se exponen por HTTP. Nada de /env, /beans, etc.,
+# que revelan configuración interna (y posibles secretos).
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true # /actuator/health/liveness y /readiness (Render usa readiness)
+  info:
+    git:
+      mode: full # expone el SHA completo del commit: trazabilidad del despliegue
+    build:
+      enabled: true

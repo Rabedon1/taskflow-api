@@ -1,0 +1,18 @@
+# Perfil de producción (Render + Neon). No contiene URLs ni credenciales:
+# todo llega por variables de entorno configuradas en Render como secretos:
+#   SPRING_DATASOURCE_URL       jdbc:postgresql://<host>/<db>?sslmode=require
+#   SPRING_DATASOURCE_USERNAME
+#   SPRING_DATASOURCE_PASSWORD
+#   PORT                         lo inyecta Render
+spring:
+  datasource:
+    hikari:
+      # El plan gratuito de Neon limita conexiones: un pool pequeño es suficiente para esta API.
+      maximum-pool-size: 5
+      # Neon "duerme" sin tráfico; el primer acceso puede tardar varios segundos en despertar.
+      connection-timeout: 30000
+      initialization-fail-timeout: 60000
+
+server:
+  # Render termina TLS en su proxy; así la app respeta X-Forwarded-* (URLs https en Location).
+  forward-headers-strategy: framework
