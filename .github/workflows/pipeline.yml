@@ -1,0 +1,33 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ORQUESTADOR del pipeline. No hace trabajo por sí mismo: decide QUÉ etapas
+# corren según el evento y las encadena. Cada etapa vive en su propio workflow
+# reutilizable (ci.yml, y más adelante security.yml, docker.yml, cd.yml).
+#
+#   pull_request → main : validar (no publica ni despliega)
+#   push         → main : validar + (más adelante) publicar y desplegar
+#   workflow_dispatch   : ejecución manual (más adelante: redeploy/rollback)
+# ─────────────────────────────────────────────────────────────────────────────
+name: Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Permisos mínimos por defecto para el GITHUB_TOKEN de TODOS los jobs.
+# Los jobs que necesiten más (publicar paquetes, desplegar) los pedirán explícitamente.
+permissions:
+  contents: read
+
+# En un PR, un push nuevo cancela la ejecución anterior de esa misma rama
+# (no tiene sentido terminar de probar un commit que ya fue reemplazado).
+# En main NO se cancela: cada merge debe terminar su recorrido completo.
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
