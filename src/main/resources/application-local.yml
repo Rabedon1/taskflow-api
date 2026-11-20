@@ -1,0 +1,6 @@
+# Perfil para desarrollo local contra el PostgreSQL de docker-compose.
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/taskflow
+    username: taskflow
+    password: taskflow
