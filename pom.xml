@@ -23,6 +23,7 @@
 		<spotbugs-plugin.version>4.10.5.0</spotbugs-plugin.version>
 		<jacoco.version>0.8.16</jacoco.version>
 		<jacoco.minimum.line.coverage>0.80</jacoco.minimum.line.coverage>
+		<springdoc.version>3.2.0</springdoc.version>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -44,6 +45,12 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+		<!-- Documentación OpenAPI + Swagger UI en /swagger-ui.html -->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>${springdoc.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
