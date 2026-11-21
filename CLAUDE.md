@@ -2,8 +2,8 @@
 
 Proyecto educativo: una API REST de tareas (Spring Boot) cuyo verdadero protagonista es el **pipeline CI/CD** (GitHub Actions → GHCR → Render, con base de datos en Neon).
 
-- Diseño (fuente de verdad): `docs/superpowers/specs/2026-11-18-taskflow-api-cicd-design.md`
-- Plan de implementación: `docs/superpowers/plans/2026-11-18-taskflow-api-cicd.md`
+- Diseño (fuente de verdad, solo local, ignorado por Git): `docs/superpowers/specs/2026-11-18-taskflow-api-cicd-design.md`
+- Plan de implementación (solo local, ignorado por Git): `docs/superpowers/plans/2026-11-18-taskflow-api-cicd.md`
 
 ## Reglas de trabajo con el autor (Rabedon1)
 

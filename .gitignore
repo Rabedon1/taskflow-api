@@ -37,3 +37,6 @@ build/
 
 ### Env files ###
 .env
+
+### Documentos internos de planificación (solo locales) ###
+docs/superpowers/
