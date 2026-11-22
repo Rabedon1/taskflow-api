@@ -22,6 +22,12 @@ on:
       tag:
         description: "Referencia inmutable por commit: ghcr.io/rabedon1/taskflow-api:sha-<7>"
         value: ${{ jobs.build.outputs.tag }}
+      digest:
+        description: "Digest de la imagen publicada (sha256:...). Vacío si push es false."
+        value: ${{ jobs.build.outputs.digest }}
+      image:
+        description: "Referencia por digest: ghcr.io/rabedon1/taskflow-api@sha256:... Vacía si push es false."
+        value: ${{ jobs.build.outputs.image }}
 
 permissions:
   contents: read
@@ -37,10 +43,18 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      # Solo para subir el reporte SARIF de Trivy a la pestaña Security.
+      # Subir el reporte SARIF de Trivy a la pestaña Security.
       security-events: write
+      # Publicar la imagen en GHCR (GitHub Container Registry).
+      packages: write
+      # Firmar la attestation de procedencia: GitHub emite un token OIDC
+      # de corta duración que prueba "este run de este repo construyó esto".
+      id-token: write
+      attestations: write
     outputs:
       tag: ${{ steps.ref.outputs.tag }}
+      digest: ${{ steps.publish.outputs.digest }}
+      image: ${{ steps.publish.outputs.image }}
     steps:
       - name: Checkout (Dockerfile y .dockerignore)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -149,3 +163,49 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy-image
+
+      # ── Publicación: SOLO en push a main y SOLO si todo lo anterior pasó ──
+      # (los steps sin "if: always()" no corren si un paso previo falló, así
+      # que una imagen que Trivy rechazó nunca llega a este punto).
+      # Se publica la MISMA imagen que se construyó y escaneó: no hay un
+      # segundo build, solo se suben las capas que ya están en el runner.
+      - name: Log in to GHCR
+        if: inputs.push
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # El token automático del run basta (packages: write): no hace falta
+          # un token personal guardado como secreto.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image and read its digest
+        id: publish
+        if: inputs.push
+        env:
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker push --all-tags "$IMAGE_NAME"
+          # RepoDigests = "ghcr.io/rabedon1/taskflow-api@sha256:..." (lo asigna
+          # el registro al recibir la imagen). Nos quedamos con lo que va tras "@".
+          repo_digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$TAG")
+          digest="${repo_digest#*@}"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Digest inesperado: '$repo_digest'"; exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE_NAME}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "### Imagen publicada" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${IMAGE_NAME}@${digest}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # Attestation de procedencia (SLSA): un certificado firmado que dice
+      # "la imagen con este digest la construyó el workflow X, del repo Y,
+      # en el commit Z". Se guarda junto a la imagen en el registro.
+      - name: Attest build provenance
+        if: inputs.push
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
