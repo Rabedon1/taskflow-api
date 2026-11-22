@@ -31,3 +31,10 @@ concurrency:
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
+
+  docker:
+    # needs: si CI falla, la imagen ni siquiera se construye.
+    needs: ci
+    uses: ./.github/workflows/docker.yml
+    with:
+      push: ${{ github.event_name == 'push' }}

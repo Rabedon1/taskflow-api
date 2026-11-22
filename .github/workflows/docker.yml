@@ -1,0 +1,107 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 · DOCKER — workflow REUTILIZABLE (lo invoca pipeline.yml).
+#
+# Responsabilidad: construir la imagen UNA sola vez a partir del JAR que ya
+# pasó CI (artefacto app-jar). No se recompila nada: el binario que va dentro
+# de la imagen es exactamente el que pasó las pruebas.
+#
+# Por ahora la imagen queda cargada en el runner y NO se publica. En las
+# etapas siguientes: se escanea con Trivy (seguridad) y, solo si está limpia
+# y el evento es un push a main, se publica en GHCR y se expone su digest.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Docker
+
+on:
+  workflow_call:
+    inputs:
+      push:
+        description: "true solo en push a main: habilita el tag 'main' (y, más adelante, la publicación)"
+        type: boolean
+        default: false
+    outputs:
+      tag:
+        description: "Referencia inmutable por commit: ghcr.io/rabedon1/taskflow-api:sha-<7>"
+        value: ${{ jobs.build.outputs.tag }}
+
+permissions:
+  contents: read
+
+env:
+  # Los nombres de imagen en un registro deben ir en minúsculas.
+  IMAGE_NAME: ghcr.io/rabedon1/taskflow-api
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.ref.outputs.tag }}
+    steps:
+      - name: Checkout (Dockerfile y .dockerignore)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the tested JAR from CI
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-jar
+          path: target/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Calcula tags y metadatos a partir del contexto de GitHub (commit, rama, fecha).
+      #   sha-<7>: siempre — identifica el commit exacto.
+      #   main   : solo en push a main — "lo último integrado" (se mueve).
+      - name: Compute tags and metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=main,enable=${{ inputs.push }}
+
+      - name: Build image (load into the runner, no push yet)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          # Los labels OCI los escribe el Dockerfile con estos valores reales.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+          # Caché de capas en GitHub Actions: la capa de Java (~300 MB) no se
+          # vuelve a descargar en cada run; solo cambia la capa del JAR.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Expose the immutable commit tag
+        id: ref
+        env:
+          VERSION: ${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+        run: echo "tag=${IMAGE_NAME}:${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Comprobaciones rápidas sobre la imagen construida: que no corra como
+      # root y que lleve el commit correcto en sus labels (trazabilidad).
+      - name: Check image user and traceability labels
+        env:
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          user=$(docker image inspect --format '{{.Config.User}}' "$TAG")
+          revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$TAG")
+          echo "image:    $TAG"
+          echo "user:     $user"
+          echo "revision: $revision"
+          if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
+            echo "::error::La imagen corre como root"; exit 1
+          fi
+          if [ "$revision" != "$GITHUB_SHA" ]; then
+            echo "::error::El label revision ($revision) no coincide con el commit ($GITHUB_SHA)"; exit 1
+          fi
