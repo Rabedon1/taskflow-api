@@ -6,7 +6,7 @@
 
 # Imagen base fijada por digest: el tag "17-jre" se mueve con cada parche,
 # el digest identifica un contenido exacto e inmutable. Dependabot lo actualiza.
-FROM eclipse-temurin:17-jre@sha256:541b08fc7f494edf14e436ff6bfb55767e4a115c87bfc547b8c5de957b58737f
+FROM eclipse-temurin:24-jre@sha256:8cb2387a28af84cf0db0948d9c67d4480192f4e567027a3963f145d218e8b4f2
 
 ARG JAR_FILE=target/*.jar
 ARG GIT_SHA=unknown
