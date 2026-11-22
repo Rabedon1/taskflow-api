@@ -35,6 +35,10 @@ jobs:
     name: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      # Solo para subir el reporte SARIF de Trivy a la pestaña Security.
+      security-events: write
     outputs:
       tag: ${{ steps.ref.outputs.tag }}
     steps:
@@ -105,3 +109,43 @@ jobs:
           if [ "$revision" != "$GITHUB_SHA" ]; then
             echo "::error::El label revision ($revision) no coincide con el commit ($GITHUB_SHA)"; exit 1
           fi
+
+      # ── Escaneo de vulnerabilidades ANTES de publicar ──────────────────────
+      # Trivy revisa los paquetes del sistema operativo de la imagen (Ubuntu)
+      # y las librerías Java dentro del JAR contra bases de CVE públicas.
+      # Bloquea si hay algo CRÍTICO o ALTO que ya tenga parche disponible
+      # (ignore-unfixed: un CVE sin parche no se puede arreglar subiendo versión;
+      # bloquear por él dejaría el pipeline rojo sin nada que hacer).
+      - name: Scan image for vulnerabilities (blocking)
+        id: trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.2
+          image-ref: ${{ steps.ref.outputs.tag }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      # Mismo escaneo en formato SARIF para la pestaña Security → Code scanning.
+      # if: always() → también (sobre todo) cuando el paso anterior falló,
+      # para ver los hallazgos en la interfaz de GitHub.
+      - name: Generate SARIF report
+        if: always() && steps.ref.outcome == 'success'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.2
+          image-ref: ${{ steps.ref.outputs.tag }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          limit-severities-for-sarif: true
+          exit-code: "0"
+
+      - name: Upload SARIF to GitHub Security
+        if: always() && steps.ref.outcome == 'success'
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image

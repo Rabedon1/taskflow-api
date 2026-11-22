@@ -32,9 +32,19 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
+  # Corre EN PARALELO con ci (no depende de él): revisar secretos y
+  # dependencias no necesita esperar a que terminen las pruebas.
+  security:
+    uses: ./.github/workflows/security.yml
+
   docker:
     # needs: si CI falla, la imagen ni siquiera se construye.
     needs: ci
+    # Un workflow llamado nunca puede tener MÁS permisos que su llamador:
+    # el permiso para subir el reporte de Trivy se concede aquí, solo a este job.
+    permissions:
+      contents: read
+      security-events: write
     uses: ./.github/workflows/docker.yml
     with:
       push: ${{ github.event_name == 'push' }}
