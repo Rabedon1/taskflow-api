@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 3 · CD — workflow REUTILIZABLE (lo invoca pipeline.yml).
+#
+# Responsabilidad: desplegar en Render una imagen YA publicada, identificada
+# por su digest, y comprobar que producción corre el commit esperado.
+# No construye nada: por eso el mismo workflow sirve para el deploy normal
+# (después de un merge) y para un redeploy/rollback manual.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CD
+
+on:
+  workflow_call:
+    inputs:
+      image_digest:
+        description: "Digest de la imagen en GHCR (sha256:...)"
+        type: string
+        required: true
+      git_sha:
+        description: "Commit (SHA completo) que esa imagen contiene"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# Un solo despliegue a producción a la vez, y nunca se cancela uno a medias.
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # El environment "production" tiene reglas de protección: el job se
+    # PAUSA hasta que un revisor lo aprueba, y solo entonces puede leer los
+    # secretos y variables del environment.
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    steps:
+      - name: Validate inputs
+        env:
+          DIGEST: ${{ inputs.image_digest }}
+          GIT_SHA: ${{ inputs.git_sha }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::image_digest inválido: '$DIGEST'"; exit 1; }
+          [[ "$GIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::git_sha debe ser el SHA completo de 40 caracteres"; exit 1; }
+
+      - name: Checkout (scripts/verify-deploy.sh)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # El deploy hook de Render es una URL con un token dentro: quien la
+      # tenga puede desplegar. Vive como secreto del environment, se pasa por
+      # env (nunca interpolada en el script) y se enmascara en los logs.
+      # imgURL le dice a Render QUÉ imagen exacta correr: por digest, no por tag.
+      - name: Trigger Render deploy (by digest)
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$HOOK"
+          if [ -z "$HOOK" ]; then
+            echo "::error::Falta el secreto RENDER_DEPLOY_HOOK_URL en el environment production"; exit 1
+          fi
+          img="ghcr.io/rabedon1/taskflow-api@${DIGEST}"
+          enc=$(jq -rn --arg v "$img" '$v|@uri')
+          curl -fsS --max-time 60 -o /dev/null -X POST "${HOOK}&imgURL=${enc}"
+          echo "Deploy solicitado a Render: $img"
+          {
+            echo "### Despliegue a producción"
+            echo "- Imagen: \`$img\`"
+            echo "- Commit: \`${{ inputs.git_sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the deployed commit
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          GIT_SHA: ${{ inputs.git_sha }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "::error::Falta la variable APP_URL en el environment production"; exit 1
+          fi
+          bash scripts/verify-deploy.sh "$APP_URL" "$GIT_SHA" 600
