@@ -17,7 +17,11 @@ if [ ! -f "$VERIFY" ]; then
 fi
 
 echo "== Construyendo el JAR del commit actual y levantando compose"
-./mvnw -B -q package -DskipTests || { echo "FAIL: build"; exit 1; }
+./mvnw -B -q clean package -DskipTests || { echo "FAIL: build"; exit 1; }
+# El build es reproducible: el JAR siempre tiene fecha 1980 y, entre commits, a
+# menudo el mismo tamaño. Docker decide qué archivos del contexto reenviar por
+# fecha+tamaño, así que reutilizaría el JAR viejo. touch fuerza el reenvío.
+touch target/*.jar
 docker compose up -d --build >/dev/null 2>&1 || { echo "FAIL: compose up"; exit 1; }
 trap 'docker compose down >/dev/null 2>&1' EXIT
 
