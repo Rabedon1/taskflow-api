@@ -31,3 +31,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: "build"
+    ignore:
+      # La app compila y se prueba con Java 17 (LTS). Cambiar de versión mayor
+      # de Java (17 → 21, 24...) es una decisión deliberada, no una
+      # actualización automática: Dependabot solo debe traer parches de 17.
+      - dependency-name: eclipse-temurin
+        update-types: ["version-update:semver-major"]
