@@ -1,0 +1,5 @@
+# El contexto de build solo necesita el JAR: todo lo demás se ignora.
+# Así ningún secreto local (.env, .git, credenciales) puede acabar en la imagen,
+# y el envío del contexto al motor de Docker es casi instantáneo.
+*
+!target/*.jar
