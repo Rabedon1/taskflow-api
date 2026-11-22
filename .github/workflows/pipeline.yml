@@ -41,10 +41,14 @@ jobs:
     # needs: si CI falla, la imagen ni siquiera se construye.
     needs: ci
     # Un workflow llamado nunca puede tener MÁS permisos que su llamador:
-    # el permiso para subir el reporte de Trivy se concede aquí, solo a este job.
+    # los permisos extra se conceden aquí, SOLO a este job. Aunque se otorguen
+    # también en un PR, los steps de publicación solo corren con push: true.
     permissions:
       contents: read
-      security-events: write
+      security-events: write # reporte SARIF de Trivy
+      packages: write        # publicar en GHCR
+      id-token: write        # firmar la attestation (OIDC)
+      attestations: write    # guardar la attestation
     uses: ./.github/workflows/docker.yml
     with:
       push: ${{ github.event_name == 'push' }}
