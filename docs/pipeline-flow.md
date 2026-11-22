@@ -1,6 +1,6 @@
 # Flujo del pipeline
 
-Este documento explica **qué** hace cada parte del pipeline, **por qué** está diseñada así y **qué pasaría si no**. Se va completando etapa por etapa.
+Este documento explica **qué** hace cada parte del pipeline, **por qué** está diseñada así y **qué pasaría si no**. Para el detalle de cada herramienta, ver [tooling.md](tooling.md).
 
 ## Vista general
 
@@ -8,15 +8,22 @@ Este documento explica **qué** hace cada parte del pipeline, **por qué** está
 flowchart LR
     PR[Pull Request a main] --> P{pipeline.yml}
     PUSH[Push / merge a main] --> P
+    P --> SEC[security.yml<br/>Gitleaks + dependency review]
     P --> CI[ci.yml<br/>verify + JAR]
-    CI -- artefacto app-jar --> D[docker.yml<br/>imagen desde el JAR]
+    CI -- artefacto app-jar --> D[docker.yml<br/>imagen + Trivy + GHCR]
+    D -- digest --> CD[cd.yml<br/>aprobación + Render + verificación]
+    SEC --> CD
 ```
 
 | Archivo | Tipo | Responsabilidad |
 |---|---|---|
 | `.github/workflows/pipeline.yml` | Orquestador | Decide qué etapas corren según el evento y las encadena |
 | `.github/workflows/ci.yml` | Reutilizable (`workflow_call`) | Pruebas, calidad y empaquetado del JAR |
-| `.github/workflows/docker.yml` | Reutilizable (`workflow_call`) | Construir la imagen **una vez** con el JAR de CI |
+| `.github/workflows/docker.yml` | Reutilizable (`workflow_call`) | Construir la imagen **una vez** con el JAR de CI, escanearla y publicarla |
+| `.github/workflows/security.yml` | Reutilizable (`workflow_call`) | Secretos en el historial y dependencias vulnerables |
+| `.github/workflows/cd.yml` | Reutilizable (`workflow_call`) | Desplegar un digest en Render y verificar el commit |
+| `.github/dependabot.yml` | Configuración | Actualizaciones semanales de dependencias, Actions e imagen base |
+| `scripts/verify-deploy.sh` | Script | Verificación post-despliegue (con prueba en `scripts/test-verify-deploy.sh`) |
 
 ---
 
@@ -36,11 +43,11 @@ Un **workflow reutilizable** declara `on: workflow_call` y no se dispara solo: o
 
 | Evento | Qué significa | Qué corre hoy |
 |---|---|---|
-| `pull_request` → `main` | Alguien propone integrar cambios | CI + construir imagen (sin tag `main`) |
-| `push` → `main` | Los cambios ya se integraron (merge) | CI + construir imagen (tags `sha-<7>` y `main`) |
-| `workflow_dispatch` | Ejecución manual desde la UI o `gh` | CI + construir imagen (más adelante: redeploy/rollback) |
+| `pull_request` → `main` | Alguien propone integrar cambios | security (las dos revisiones) + CI + construir y escanear la imagen |
+| `push` → `main` | Los cambios ya se integraron (merge) | secret-scan + CI + imagen + **publicar** + **deploy con aprobación** + verificación |
+| `workflow_dispatch` | Ejecución manual (`gh workflow run`) | **Solo** `redeploy` de un digest ya publicado (rollback) |
 
-En las etapas siguientes, publicar la imagen y desplegar solo correrá en `push` a `main`. **Un PR nunca publica ni despliega:** es código que todavía no fue aprobado.
+**Un PR nunca publica ni despliega:** es código que todavía no fue aprobado.
 
 ## 3. Etapa CI (`ci.yml`)
 
@@ -164,3 +171,113 @@ Los YAML se validan antes de subirlos con [actionlint](https://github.com/rhysd/
 ```bash
 docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:latest -color
 ```
+
+---
+
+## 6. Etapa de seguridad
+
+| Control | Dónde | Cuándo bloquea |
+|---|---|---|
+| **Gitleaks** | `security / secret-scan` | Un token, clave o contraseña en **cualquier commit** del historial |
+| **Dependency review** | `security / dependency-review` (solo PR) | El PR agrega o sube una dependencia con un CVE de severidad alta o crítica |
+| **Trivy** | step en `docker / build` | La imagen tiene un CVE **crítico o alto con parche disponible**, en Ubuntu o en el JAR |
+| **Dependabot** | `.github/dependabot.yml` | No bloquea: abre PRs semanales que pasan por todo el pipeline |
+
+`security` corre **en paralelo** con `ci`, porque no necesita esperar a las pruebas. El deploy depende de `security`: con un secreto filtrado no se despliega.
+
+> **Caso real de este repositorio:** Dependabot propuso cambiar la imagen base a `eclipse-temurin:24-jre`. Trivy encontró 16 CVE altos en su Ubuntu y bloqueó el PR. La imagen vulnerable nunca se publicó.
+
+## 7. Publicación en GHCR
+
+Solo en `push` a `main` y **después** de que Trivy pasa:
+
+1. `docker login ghcr.io` con el `GITHUB_TOKEN` del run (permiso `packages: write`, solo en este job). No hace falta un token personal.
+2. `docker push` de la **misma** imagen que se escaneó. No hay un segundo build.
+3. Se lee el **digest** que asignó el registro. Se valida su formato, se expone como output y se muestra en el *Summary* del run.
+4. **Attestation de procedencia (SLSA):** se firma con una identidad OIDC temporal (Sigstore) y se guarda junto a la imagen. Cualquiera puede verificarla:
+   ```bash
+   gh attestation verify oci://ghcr.io/rabedon1/taskflow-api@sha256:<digest> --owner Rabedon1
+   ```
+
+## 8. Despliegue (`cd.yml`)
+
+1. El job declara `environment: production` y **se pausa** hasta que un revisor lo aprueba.
+2. Valida que `image_digest` sea `sha256:` + 64 caracteres y que `git_sha` tenga 40.
+3. Llama al **deploy hook** de Render con `imgURL=ghcr.io/rabedon1/taskflow-api@<digest>`, codificada como URL. El hook es un secreto del environment, se enmascara en los logs y nunca se imprime.
+4. `scripts/verify-deploy.sh` consulta producción cada 10 segundos, durante un máximo de 10 minutos:
+   - `/actuator/health` debe responder `UP`;
+   - `/actuator/info` debe mostrar `git.commit.id.full` igual al commit del merge.
+
+   Si el commit no coincide, sigue esperando, porque la versión anterior responde hasta que la nueva está lista. Si se agota el tiempo, el pipeline queda en rojo.
+
+`concurrency: production` garantiza un solo despliegue a la vez, y nunca cancela uno a medias.
+
+## 9. Del PR a producción, paso a paso
+
+```mermaid
+sequenceDiagram
+    actor Dev as Desarrollador
+    participant GH as GitHub (PR + ruleset)
+    participant CI as ci / verify
+    participant SEC as security
+    participant DK as docker / build
+    participant REG as GHCR
+    participant ENV as environment production
+    participant R as Render
+    participant DB as Neon
+
+    Dev->>GH: push de la rama + PR
+    par en paralelo
+        GH->>SEC: Gitleaks + dependency review
+    and
+        GH->>CI: mvnw verify (Testcontainers)
+    end
+    CI-->>DK: artefacto app-jar
+    DK->>DK: docker build + Trivy (no publica en un PR)
+    GH-->>Dev: checks en verde, merge habilitado
+    Dev->>GH: merge a main
+    Note over GH,DK: se repiten secret-scan, CI y docker sobre main
+    DK->>REG: push + digest + attestation
+    DK-->>ENV: digest (output)
+    ENV-->>Dev: Review deployments
+    Dev->>ENV: Approve
+    ENV->>R: deploy hook con imgURL = imagen@digest
+    R->>REG: pull por digest
+    R->>DB: Flyway + conexión SSL
+    ENV->>R: verify-deploy.sh (/health, /info)
+    R-->>ENV: UP + commit del merge
+    ENV-->>Dev: deploy verde
+```
+
+## 10. Construir una vez, promover el digest
+
+El mismo binario recorre todas las etapas, y cada una le agrega una garantía:
+
+| Etapa | Qué pasa con el artefacto | Garantía |
+|---|---|---|
+| CI | Se compila **una vez** y pasa las pruebas → `app-jar` | El código funciona |
+| Docker | El **mismo JAR** entra en la imagen (no se recompila) | La imagen contiene lo que se probó |
+| Trivy | Se escanea **esa** imagen | No hay vulnerabilidades conocidas corregibles |
+| GHCR | Se publica **esa** imagen → `sha256:…` | Tiene una identidad inmutable y procedencia firmada |
+| Deploy | Render corre **ese digest**, no un tag | Producción corre exactamente lo aprobado |
+| Verificación | `/actuator/info` = commit del merge | Se comprueba, no se supone |
+| Rollback | Se redespliega **un digest anterior** | Volver atrás es seguro y no reconstruye nada |
+
+> **Si no fuera así:** si cada etapa reconstruyera desde el código, cada una produciría un artefacto ligeramente distinto. Nadie podría afirmar con certeza que lo que corre en producción es lo que pasó las pruebas y el escaneo.
+
+## 11. Cómo reproducir la demo del fallo
+
+Esta demo muestra que el pipeline **obliga**, no solo avisa. Los comandos completos están en [github-setup.md](github-setup.md), sección 5:
+
+1. Crea la rama `demo/failing-test` y cambia una aserción en `TaskServiceTest`: `"Nueva tarea"` pasa a `"Tarea rota"`.
+2. Haz push y abre un PR.
+3. `ci / verify` queda en **rojo** y el botón de merge aparece bloqueado (*"Required statuses must pass before merging"*).
+4. Corrige la aserción y haz push otra vez: los checks quedan en verde y el merge se habilita. O cierra el PR sin hacer merge.
+
+Otras demos que puedes reproducir:
+
+| Demo | Cómo provocarla | Qué la frena |
+|---|---|---|
+| Secreto filtrado | Commitear un archivo con un token falso (por ejemplo `ghp_` + 36 caracteres) | `security / secret-scan` |
+| Imagen vulnerable | Cambiar la base del Dockerfile a una imagen vieja | Trivy en `docker / build` |
+| Rollback | `gh workflow run pipeline.yml -f digest=sha256:<anterior> -f git_sha=<sha>` | El job `redeploy` (con aprobación) |
