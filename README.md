@@ -7,6 +7,8 @@ API REST de tareas en **Spring Boot**. El verdadero protagonista del proyecto es
 
 **En vivo:** https://taskflow-api-main.onrender.com/swagger-ui.html. El plan gratuito se duerme sin uso, así que la primera visita puede tardar unos 60 segundos.
 
+![Arquitectura del pipeline CI/CD: Pull Request, pruebas, imagen Docker, escaneo, GHCR, aprobación manual y despliegue en Render con Neon](docs/images/arquitectura-pipeline.png)
+
 ## El pipeline
 
 ```mermaid
