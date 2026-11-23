@@ -1,6 +1,7 @@
 # TaskFlow API — de cero a producción con CI/CD
 
 [![Pipeline](https://github.com/Rabedon1/taskflow-api/actions/workflows/pipeline.yml/badge.svg?branch=main)](https://github.com/Rabedon1/taskflow-api/actions/workflows/pipeline.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 API REST de tareas en **Spring Boot**. El verdadero protagonista del proyecto es el **pipeline CI/CD**, construido paso a paso con **GitHub Actions**. Cada cambio pasa por pruebas, controles de calidad y escaneos de seguridad. Después se empaqueta **una sola vez** en una imagen Docker, se publica en **GHCR** con firma de procedencia y, tras una aprobación manual, se despliega **por digest** en **Render**, con la base de datos en **Neon**. Al final, el pipeline verifica que producción corre el commit exacto.
 
@@ -92,3 +93,7 @@ Los errores siguen el formato **RFC 9457** (`application/problem+json`).
 | **Aprobación manual del despliegue** | ![Aprobación](docs/img/04-aprobacion-deploy.png) |
 | **Verificación: producción corre el commit del merge** | ![Verificación](docs/img/05-verificacion-ok.png) |
 | **`/actuator/info` en producción** | ![Info en producción](docs/img/06-info-produccion.png) |
+
+## Licencia
+
+[MIT](LICENSE) © 2026 Rabedon1

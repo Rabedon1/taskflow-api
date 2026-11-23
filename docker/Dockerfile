@@ -20,7 +20,8 @@ LABEL org.opencontainers.image.title="taskflow-api" \
       org.opencontainers.image.source="https://github.com/Rabedon1/taskflow-api" \
       org.opencontainers.image.revision="${GIT_SHA}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.version="${VERSION}"
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.licenses="MIT"
 
 # Usuario sin privilegios: si alguien explota la app, no es root en el contenedor.
 RUN groupadd --system --gid 10001 app \
